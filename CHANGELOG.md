@@ -1,3 +1,78 @@
+## [1.2.1](https://github.com/fgrehm/vagrant-lxc/compare/v1.2.0...v1.2.1) (Sep 24, 2015)
+
+BUGFIX:
+  - Fix sudo Wrapper [[GH-393]]
+[GH-393]: https://github.com/fgrehm/vagrant-lxc/pull/393
+
+## [1.2.0](https://github.com/fgrehm/vagrant-lxc/compare/v1.1.0...v1.2.0) (Sep 15, 2015)
+
+FEATURES:
+  - Support private networking using DHCP [[GH-352]]
+
+[GH-352]: https://github.com/fgrehm/vagrant-lxc/pull/352
+
+IMPROVEMENTS:
+
+  - Move mountpoint creation to lxc template for lvm rootfs support [[GH-361]] / [[GH-359]]
+  - Mount selinux sys dir read-only [[GH-357]] / [[GH-301]]
+  - Use correct ruby interpreter when generating sudoers file [[GH-355]]
+  - Fix shebangs to be more portable [[GH-376]]
+  - Fix removal of lxcbr0/virbr0 when using private networking [[GH-383]]
+  - Improve /tmp handling by using tmpfs [[GH-362]]
+[GH-301]: https://github.com/fgrehm/vagrant-lxc/issues/301
+[GH-355]: https://github.com/fgrehm/vagrant-lxc/pull/355
+[GH-357]: https://github.com/fgrehm/vagrant-lxc/pull/357
+[GH-359]: https://github.com/fgrehm/vagrant-lxc/issues/359
+[GH-361]: https://github.com/fgrehm/vagrant-lxc/pull/361
+[GH-376]: https://github.com/fgrehm/vagrant-lxc/pull/376
+[GH-383]: https://github.com/fgrehm/vagrant-lxc/pull/383
+[GH-362]: https://github.com/fgrehm/vagrant-lxc/pull/362
+
+## [1.1.0](https://github.com/fgrehm/vagrant-lxc/compare/v1.0.1...v1.1.0) (Jan 14, 2015)
+
+BACKWARDS INCOMPATIBILITIES:
+
+  - Support for Vagrant versions prior to 1.5 have been removed. The plugin now targets
+    Vagrant 1.7+ but it _might_ work on 1.5+.
+
+FEATURES:
+
+  - New experimental support for private networking [[GH-298]] / [[GH-120]].
+  - Support for formatted overlayfs path [[GH-329]]
+
+
+[GH-298]: https://github.com/fgrehm/vagrant-lxc/pull/298
+[GH-120]: https://github.com/fgrehm/vagrant-lxc/issues/120
+[GH-329]: https://github.com/fgrehm/vagrant-lxc/pull/329
+
+IMPROVEMENTS:
+
+  - The provider will now have a higher priority over the VirtualBox provider
+    in case VirtualBox is installed alongside lxc dependecies.
+  - Show an user friendly message when trying to use the plugin on non-Linux
+    environments.
+
+BUG FIXES:
+
+  - Allow backingstore options to be used along with the sudo wrapper script [[GH-310]]
+  - Trim automatically generated container names to 64 chars [[GH-337]]
+
+[GH-337]: https://github.com/fgrehm/vagrant-lxc/issues/337
+[GH-310]: https://github.com/fgrehm/vagrant-lxc/issues/310
+
+
+## [1.0.1](https://github.com/fgrehm/vagrant-lxc/compare/v1.0.0...v1.0.1) (Oct 15, 2014)
+
+IMPROVEMENTS:
+
+  - Avoid lock race condition when fetching container's IP [[GH-318]] and SSH execution [[GH-321]]
+  - Support for custom containers storage path by reading `lxc.lxcpath` [[GH-317]]
+
+
+[GH-317]: https://github.com/fgrehm/vagrant-lxc/pull/317
+[GH-318]: https://github.com/fgrehm/vagrant-lxc/pull/318
+[GH-321]: https://github.com/fgrehm/vagrant-lxc/issues/321
+
 ## [1.0.0](https://github.com/fgrehm/vagrant-lxc/compare/v1.0.0.alpha.3...v1.0.0) (Sep 23, 2014)
 
 DEPRECATIONS:

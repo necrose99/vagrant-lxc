@@ -18,12 +18,20 @@ module Vagrant
       class NamespacesNotSupported < Vagrant::Errors::VagrantError
       end
 
+      class LxcLinuxRequired < Vagrant::Errors::VagrantError
+        error_key(:lxc_linux_required)
+      end
+
       class LxcNotInstalled < Vagrant::Errors::VagrantError
         error_key(:lxc_not_installed)
       end
 
       class ContainerAlreadyExists < Vagrant::Errors::VagrantError
         error_key(:lxc_container_already_exists)
+      end
+
+      class CommandNotSupported < Vagrant::Errors::VagrantError
+        error_key(:lxc_command_not_supported)
       end
 
       # Box related errors

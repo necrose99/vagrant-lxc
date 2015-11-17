@@ -9,6 +9,14 @@ module Vagrant
     class Provider < Vagrant.plugin("2", :provider)
       attr_reader :driver
 
+      def self.usable?(raise_error=false)
+        if !Vagrant::Util::Platform.linux?
+          raise Errors::LxcLinuxRequired
+        end
+
+        true
+      end
+
       def initialize(machine)
         @logger    = Log4r::Logger.new("vagrant::provider::lxc")
         @machine   = machine
@@ -64,13 +72,13 @@ module Vagrant
 
       # Returns the SSH info for accessing the Container.
       def ssh_info
-        # If the Container is not created then we cannot possibly SSH into it, so
+        # If the Container is not running then we cannot possibly SSH into it, so
         # we return nil.
-        return nil if state == :not_created
+        return nil if state.id != :running
 
-        # Run a custom action called "fetch_ip" which does what it says and puts
+        # Run a custom action called "ssh_ip" which does what it says and puts
         # the IP found into the `:machine_ip` key in the environment.
-        env = @machine.action("fetch_ip")
+        env = @machine.action("ssh_ip")
 
         # If we were not able to identify the container's IP, we return nil
         # here and we let Vagrant core deal with it ;)

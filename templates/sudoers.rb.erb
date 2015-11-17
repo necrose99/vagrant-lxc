@@ -1,28 +1,44 @@
-#!/opt/vagrant/embedded/bin/ruby
+#!<%= cmd_paths['ruby'] %>
 # Automatically created by vagrant-lxc
 
 class Whitelist
   class << self
     def add(command, *args)
+      list[command] ||= []
       list[command] << args
     end
 
+    def add_regex(regex, *args)
+      regex_list << [regex, [args]]
+    end
+
     def list
-      @list ||= Hash.new do |key, hsh|
-        key[hsh] = []
-      end
+      @list ||= {}
+    end
+
+    def regex_list
+      @regex_list ||= []
     end
 
     def allowed(command)
-      list[command] || []
+      list[command] || allowed_regex(command) || []
+    end
+
+    def allowed_regex(command)
+      found = regex_list.find { |r| r[0] =~ command }
+      return found[1] if found
     end
 
     def run!(argv)
       begin
         command, args = `which #{argv.shift}`.chomp, argv || []
         check!(command, args)
-        puts `#{command} #{args.join(" ")}`
-        exit $?.to_i
+        system "#{command} #{args.join(" ")}"
+
+        exit_code = $?.to_i
+        exit_code = 1 if exit_code == 256
+
+        exit exit_code
       rescue => e
         STDERR.puts e.message
         exit 1
@@ -64,7 +80,6 @@ end
 
 base = "/var/lib/lxc"
 base_path = %r{\A#{base}/.*\z}
-templates_path = %r{\A/usr/(share|lib|lib64|local/lib)/lxc/templates/.*\z}
 
 ##
 # Commands from provider.rb
@@ -80,14 +95,14 @@ Whitelist.add '<%= cmd_paths['mkdir'] %>', '-p', base_path
 # - Container config customizations and pruning
 Whitelist.add '<%= cmd_paths['cp'] %>', '-f', %r{/tmp/.*}, base_path
 Whitelist.add '<%= cmd_paths['chown'] %>', 'root:root', base_path
-# - Template import
-Whitelist.add '<%= cmd_paths['cp'] %>', %r{\A.*\z}, templates_path
-Whitelist.add '<%= cmd_paths['chmod'] %>', '+x', templates_path
-# - Template removal
-Whitelist.add '<%= cmd_paths['rm'] %>', templates_path
 # - Packaging
 Whitelist.add '<%= cmd_paths['tar'] %>', '--numeric-owner', '-cvzf', %r{/tmp/.*/rootfs.tar.gz}, '-C', base_path, './rootfs'
 Whitelist.add '<%= cmd_paths['chown'] %>', /\A\d+:\d+\z/, %r{\A/tmp/.*/rootfs\.tar\.gz\z}
+# - Private network script and commands
+Whitelist.add '<%= cmd_paths['ip'] %>', 'addr', 'add', /(\d+|\.)+\/24/, 'dev', /.+/
+Whitelist.add '<%= cmd_paths['ip'] %>', 'link', 'set', /.+/, /(up|down)/
+Whitelist.add '<%= cmd_paths['brctl'] %>', /(addbr|delbr)/, /.+/
+Whitelist.add_regex %r{<%= pipework_regex %>}, '**'
 
 ##
 # Commands from driver/cli.rb
@@ -95,12 +110,14 @@ Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-version'
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-ls'
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-info', '--name', /.*/
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-create', '-B', /.*/, '--template', /.*/, '--name', /.*/, '**'
+Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-create', '--version'
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-destroy', '--name', /.*/
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-start', '-d', '--name', /.*/, '**'
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-stop', '--name', /.*/
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-shutdown', '--name', /.*/
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-attach', '--name', /.*/, '**'
 Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-attach', '-h'
+Whitelist.add '<%= cmd_paths['lxc_bin'] %>/lxc-config', 'lxc.lxcpath'
 
 ##
 # Commands from driver/action/remove_temporary_files.rb

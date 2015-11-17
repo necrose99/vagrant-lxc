@@ -54,7 +54,7 @@ describe Vagrant::LXC::Driver do
 
     it 'creates container with the right arguments' do
       expect(cli).to have_received(:create).with(
-        template_name,
+        template_path,
         backingstore,
         backingstore_opts,
         config_file,
@@ -89,7 +89,7 @@ describe Vagrant::LXC::Driver do
   describe 'start' do
     let(:customizations)         { [['a', '1'], ['b', '2']] }
     let(:internal_customization) { ['internal', 'customization'] }
-    let(:cli)                    { double(Vagrant::LXC::Driver::CLI, start: true) }
+    let(:cli)                    { double(Vagrant::LXC::Driver::CLI, start: true, support_config_command?: false) }
     let(:sudo)                   { double(Vagrant::LXC::SudoWrapper) }
 
     subject { described_class.new('name', sudo, cli) }
@@ -97,8 +97,9 @@ describe Vagrant::LXC::Driver do
     before do
       sudo.should_receive(:run).with('cat', '/var/lib/lxc/name/config').exactly(2).times.
         and_return('# CONFIGURATION')
-      sudo.should_receive(:run).twice.with('cp', '-f', %r{/tmp/.*}, '/var/lib/lxc/name/config')
+      sudo.should_receive(:run).twice.with('cp', '-f', %r{/(run|tmp)/.*}, '/var/lib/lxc/name/config')
       sudo.should_receive(:run).twice.with('chown', 'root:root', '/var/lib/lxc/name/config')
+
       subject.customizations << internal_customization
       subject.start(customizations)
     end
@@ -150,45 +151,127 @@ describe Vagrant::LXC::Driver do
     end
   end
 
+  describe 'containers_path' do
+    let(:cli) { double(Vagrant::LXC::Driver::CLI, config: cli_config_value, support_config_command?: cli_support_config_command_value) }
+
+    subject { described_class.new('name', nil, cli) }
+
+    describe 'lxc version before 1.x.x' do
+      let(:cli_support_config_command_value) { false }
+      let(:cli_config_value)                 { '/var/lib/lxc' }
+
+      it 'delegates to cli' do
+        expect(subject.containers_path).to eq(cli_config_value)
+      end
+    end
+
+    describe 'lxc version after 1.x.x' do
+      let(:cli_support_config_command_value) { true }
+      let(:cli_config_value)                 { '/etc/lxc' }
+
+      it 'delegates to cli' do
+        expect(subject.containers_path).to eq(cli_config_value)
+      end
+    end
+  end
+
   describe 'folder sharing' do
     let(:shared_folder)       { {guestpath: '/vagrant', hostpath: '/path/to/host/dir'} }
     let(:ro_rw_folder)        { {guestpath: '/vagrant/ro_rw', hostpath: '/path/to/host/dir', mount_options: ['ro', 'rw']} }
     let(:with_space_folder)   { {guestpath: '/tmp/with space', hostpath: '/path/with space'} }
     let(:folders)             { [shared_folder, ro_rw_folder, with_space_folder] }
-    let(:rootfs_path)         { Pathname('/path/to/rootfs') }
     let(:expected_guest_path) { "vagrant" }
     let(:sudo_wrapper)        { double(Vagrant::LXC::SudoWrapper, run: true) }
+    let(:rootfs_path)         { Pathname('/path/to/rootfs') }
 
     subject { described_class.new('name', sudo_wrapper) }
 
-    before do
-      subject.stub(rootfs_path: rootfs_path, system: true)
-      subject.share_folders(folders)
+    describe "with fixed rootfs" do
+      before do
+        subject.stub(rootfs_path: Pathname('/path/to/rootfs'), system: true)
+        subject.share_folders(folders)
+      end
+
+      it 'adds a mount.entry to its local customizations' do
+        expect(subject.customizations).to include [
+          'mount.entry',
+          "#{shared_folder[:hostpath]} #{expected_guest_path} none bind,create=dir 0 0"
+        ]
+      end
+
+      it 'supports additional mount options' do
+        expect(subject.customizations).to include [
+          'mount.entry',
+          "#{ro_rw_folder[:hostpath]} vagrant/ro_rw none ro,rw 0 0"
+        ]
+      end
+
+      it 'supports directories with spaces' do
+        expect(subject.customizations).to include [
+          'mount.entry',
+          "/path/with\\040space tmp/with\\040space none bind,create=dir 0 0"
+        ]
+      end
     end
 
-    it "creates guest folder under container's rootfs" do
-      expect(sudo_wrapper).to have_received(:run).with("mkdir", "-p", "#{rootfs_path}/#{expected_guest_path}")
+    describe "with directory-based LXC config" do
+      let(:config_string) {
+        <<-ENDCONFIG.gsub(/^\s+/, '')
+          # Blah blah comment
+          lxc.mount.entry = proc proc proc nodev,noexec,nosuid 0 0
+          lxc.mount.entry = sysfs sys sysfs defaults  0 0
+          lxc.tty = 4
+          lxc.pts = 1024
+          lxc.rootfs = #{rootfs_path}
+          # VAGRANT-BEGIN
+          lxc.network.type=veth
+          lxc.network.name=eth1
+          # VAGRANT-END
+        ENDCONFIG
+      }
+
+      before do
+        subject { described_class.new('name', sudo_wrapper) }
+        subject.stub(config_string: config_string)
+        subject.share_folders(folders)
+      end
+
+      it 'adds a mount.entry to its local customizations' do
+        expect(subject.customizations).to include [
+          'mount.entry',
+          "#{shared_folder[:hostpath]} #{expected_guest_path} none bind,create=dir 0 0"
+        ]
+      end
     end
 
-    it 'adds a mount.entry to its local customizations' do
-      expect(subject.customizations).to include [
-        'mount.entry',
-        "#{shared_folder[:hostpath]} #{expected_guest_path} none bind 0 0"
-      ]
-    end
+    describe "with overlayfs-based LXC config" do
+      let(:config_string) {
+        <<-ENDCONFIG.gsub(/^\s+/, '')
+          # Blah blah comment
+          lxc.mount.entry = proc proc proc nodev,noexec,nosuid 0 0
+          lxc.mount.entry = sysfs sys sysfs defaults  0 0
+          lxc.tty = 4
+          lxc.pts = 1024
+          lxc.rootfs = overlayfs:/path/to/master/directory:#{rootfs_path}
+          # VAGRANT-BEGIN
+          lxc.network.type=veth
+          lxc.network.name=eth1
+          # VAGRANT-END
+        ENDCONFIG
+      }
 
-    it 'supports additional mount options' do
-      expect(subject.customizations).to include [
-        'mount.entry',
-        "#{ro_rw_folder[:hostpath]} vagrant/ro_rw none ro,rw 0 0"
-      ]
-    end
+      before do
+        subject { described_class.new('name', sudo_wrapper) }
+        subject.stub(config_string: config_string)
+        subject.share_folders(folders)
+      end
 
-    it 'supports directories with spaces' do
-      expect(subject.customizations).to include [
-        'mount.entry',
-        "/path/with\\040space tmp/with\\040space none bind 0 0"
-      ]
+      it 'adds a mount.entry to its local customizations' do
+        expect(subject.customizations).to include [
+          'mount.entry',
+          "#{shared_folder[:hostpath]} #{expected_guest_path} none bind,create=dir 0 0"
+        ]
+      end
     end
   end
 end

@@ -13,15 +13,18 @@ en:
       force_shutdown: |-
         Forcing shutdown of container...
       warn_networks: |-
-        Warning! The LXC provider doesn't support any of the Vagrant public / private
-        network configurations (ex: `config.vm.network :private_network, ip: "some-ip"`).
-        They will be silently ignored.
+        Warning! The LXC provider doesn't support public networks, the settings
+        will be silently ignored.
       warn_group: |-
         Warning! The LXC provider doesn't support the :group parameter for synced
         folders. It will be silently ignored.
       warn_owner: |-
         Warning! The LXC provider doesn't support the :owner parameter for synced
         folders. It will be silently ignored.
+      setup_private_network: |-
+        Setting up private networks...
+      remove_bridge: |-
+        Removing bridge '%{name}'...
 
   vagrant:
     commands:
@@ -56,8 +59,12 @@ en:
 
         Looked up under: %{paths}
 
+      lxc_linux_required: |-
+        The LXC provider only works on Linux. Please try to use
+        another provider.
+
       lxc_not_installed: |-
-        The `lxc` package does not seem to be installed or is not accessible on the PATH.
+        The `lxc` package does not seem to be installed or `lxc-create` is not accessible on the PATH.
 
       lxc_redir_not_installed: |-
         `redir` is not installed or is not accessible on the PATH.
@@ -66,3 +73,7 @@ en:
         There is container on your system with the same name you've specified
         on your Vagrantfile (%{name}), please choose a different one or
         run `lxc-destroy --name %{name}` and try again.
+
+      lxc_command_not_supported: |-
+        Command (lxc-%{command}) not supported in version %{version}.
+        This command is available with version %{available_version}.

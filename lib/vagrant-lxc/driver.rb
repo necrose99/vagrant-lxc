@@ -6,6 +6,8 @@ require "vagrant-lxc/driver/cli"
 
 require "etc"
 
+require "tempfile"
+
 module Vagrant
   module LXC
     class Driver
@@ -13,8 +15,8 @@ module Vagrant
       # a name.
       class ContainerNotFound < StandardError; end
 
-      # Root folder where container configs are stored
-      CONTAINERS_PATH = '/var/lib/lxc'
+      # Default root folder where container configs are stored
+      DEFAULT_CONTAINERS_PATH = '/var/lib/lxc'
 
       attr_reader :container_name,
                   :customizations
@@ -31,16 +33,35 @@ module Vagrant
         raise ContainerNotFound if @container_name && ! @cli.list.include?(@container_name)
       end
 
+      # Root folder where container configs are stored
+      def containers_path
+        @containers_path ||= @cli.support_config_command? ? @cli.config('lxc.lxcpath') : DEFAULT_CONTAINERS_PATH
+      end
+
       def all_containers
         @cli.list
       end
 
       def base_path
-        Pathname.new("#{CONTAINERS_PATH}/#{@container_name}")
+        Pathname.new("#{containers_path}/#{@container_name}")
       end
 
       def rootfs_path
-        Pathname.new(config_string.match(/^lxc\.rootfs\s+=\s+(.+)$/)[1])
+        config_entry = config_string.match(/^lxc\.rootfs\s+=\s+(.+)$/)[1]
+        case config_entry
+        when /^overlayfs:/
+          # Split on colon (:), ignoring any colon escaped by an escape character ( \ )
+          # Pays attention to when the escape character is itself escaped.
+          fs_type, master_path, overlay_path = config_entry.split(/(?<!\\)(?:\\\\)*:/)
+          if overlay_path
+            Pathname.new(overlay_path)
+          else
+            # Malformed: fall back to prior behaviour
+            Pathname.new(config_entry)
+          end
+        else
+          Pathname.new(config_entry)
+        end
       end
 
       def mac_address
@@ -58,34 +79,20 @@ module Vagrant
       def create(name, backingstore, backingstore_options, template_path, config_file, template_options = {})
         @cli.name = @container_name = name
 
-        import_template(template_path) do |template_name|
-          @logger.debug "Creating container..."
-          @cli.create template_name, backingstore, backingstore_options, config_file, template_options
-        end
+        @logger.debug "Creating container..."
+        @cli.create template_path, backingstore, backingstore_options, config_file, template_options
       end
 
       def share_folders(folders)
         folders.each do |f|
-          share_folder(f[:hostpath], f[:guestpath], f.fetch(:mount_options, 'bind'))
+          share_folder(f[:hostpath], f[:guestpath], f.fetch(:mount_options, nil))
         end
       end
 
       def share_folder(host_path, guest_path, mount_options = nil)
-        guest_path      = guest_path.gsub(/^\//, '')
-        guest_full_path = rootfs_path.join(guest_path)
-
-        unless guest_full_path.directory?
-          begin
-            @logger.debug("Guest path doesn't exist, creating: #{guest_full_path}")
-            @sudo_wrapper.run('mkdir', '-p', guest_full_path.to_s)
-          rescue Errno::EACCES
-            raise Vagrant::Errors::SharedFolderCreateFailed, :path => guest_path.to_s
-          end
-        end
-
-        mount_options = Array(mount_options || ['bind'])
+        guest_path    = guest_path.gsub(/^\//, '').gsub(' ', '\\\040')
+        mount_options = Array(mount_options || ['bind', 'create=dir'])
         host_path     = host_path.to_s.gsub(' ', '\\\040')
-        guest_path    = guest_path.gsub(' ', '\\\040')
         @customizations << ['mount.entry', "#{host_path} #{guest_path} none #{mount_options.join(',')} 0 0"]
       end
 
@@ -117,6 +124,83 @@ module Vagrant
 
       def attach(*command)
         @cli.attach(*command)
+      end
+
+      def configure_private_network(bridge_name, bridge_ip, container_name, address_type, ip)
+        @logger.info "Configuring network interface for #{container_name} using #{ip} and bridge #{bridge_name}"
+        if ip
+          ip += '/24'
+        end
+
+        if ! bridge_exists?(bridge_name)
+          if not bridge_ip
+            raise "Bridge is missing and no IP was specified!"
+          end
+
+          @logger.info "Creating the bridge #{bridge_name}"
+          cmd = [
+            'brctl',
+            'addbr',
+            bridge_name
+          ]
+          @sudo_wrapper.run(*cmd)
+        end
+
+        if ! bridge_has_an_ip?(bridge_name)
+          if not bridge_ip
+            raise "Bridge has no IP and none was specified!"
+          end
+          @logger.info "Adding #{bridge_ip} to the bridge #{bridge_name}"
+          cmd = [
+            'ip',
+            'addr',
+            'add',
+            "#{bridge_ip}/24",
+            'dev',
+            bridge_name
+          ]
+          @sudo_wrapper.run(*cmd)
+          @sudo_wrapper.run('ip', 'link', 'set', bridge_name, 'up')
+        end
+
+        cmd = [
+          Vagrant::LXC.source_root.join('scripts/pipework').to_s,
+          bridge_name,
+          container_name,
+          ip ||= "dhcp"
+        ]
+        @sudo_wrapper.run(*cmd)
+      end
+
+      def bridge_has_an_ip?(bridge_name)
+        @logger.info "Checking whether the bridge #{bridge_name} has an IP"
+        `ip -4 addr show scope global #{bridge_name}` =~ /^\s+inet ([0-9.]+)\/[0-9]+\s+/
+      end
+
+      def bridge_exists?(bridge_name)
+        @logger.info "Checking whether bridge #{bridge_name} exists"
+        brctl_output = `ip link | egrep -q " #{bridge_name}:"`
+        $?.to_i == 0
+      end
+
+      def bridge_is_in_use?(bridge_name)
+        # REFACTOR: This method is **VERY** hacky
+        @logger.info "Checking if bridge #{bridge_name} is in use"
+        brctl_output = `brctl show #{bridge_name} 2>/dev/null | tail -n +2 | grep -q veth`
+        $?.to_i == 0
+      end
+
+      def remove_bridge(bridge_name)
+        if ['lxcbr0', 'virbr0'].include? bridge_name
+           @logger.info "Skipping removal of system bridge #{bridge_name}"
+           return
+        end
+
+        return unless bridge_exists?(bridge_name)
+
+        @logger.info "Removing bridge #{bridge_name}"
+        @sudo_wrapper.run('ip', 'link', 'set', bridge_name, 'down')
+        @sudo_wrapper.run('brctl', 'delbr', bridge_name)
       end
 
       def version
@@ -176,39 +260,6 @@ module Vagrant
           @sudo_wrapper.run 'cp', '-f', file.path, base_path.join('config').to_s
           @sudo_wrapper.run 'chown', 'root:root', base_path.join('config').to_s
         end
-      end
-
-      def import_template(path)
-        template_name     = "vagrant-tmp-#{@container_name}"
-        tmp_template_path = templates_path.join("lxc-#{template_name}").to_s
-
-        @logger.info 'Copying LXC template into place'
-        @sudo_wrapper.run('cp', path, tmp_template_path)
-        @sudo_wrapper.run('chmod', '+x', tmp_template_path)
-
-        yield template_name
-      ensure
-        @logger.info 'Removing LXC template'
-        if tmp_template_path
-          @sudo_wrapper.run('rm', tmp_template_path)
-        end
-      end
-
-      TEMPLATES_PATH_LOOKUP = %w(
-        /usr/share/lxc/templates
-        /usr/lib/lxc/templates
-        /usr/lib64/lxc/templates
-        /usr/local/lib/lxc/templates
-      )
-      def templates_path
-        return @templates_path if @templates_path
-
-        path = TEMPLATES_PATH_LOOKUP.find { |candidate| File.directory?(candidate) }
-        if !path
-          raise Errors::TemplatesDirMissing.new paths: TEMPLATES_PATH_LOOKUP.inspect
-        end
-
-        @templates_path = Pathname(path)
       end
     end
   end

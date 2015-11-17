@@ -8,22 +8,13 @@ require 'vagrant-lxc/action/fetch_ip_with_lxc_attach'
 require 'vagrant-lxc/action/fetch_ip_from_dnsmasq_leases'
 require 'vagrant-lxc/action/forced_halt'
 require 'vagrant-lxc/action/forward_ports'
+require 'vagrant-lxc/action/gc_private_network_bridges'
 require 'vagrant-lxc/action/handle_box_metadata'
 require 'vagrant-lxc/action/prepare_nfs_settings'
 require 'vagrant-lxc/action/prepare_nfs_valid_ids'
-require 'vagrant-lxc/action/remove_temporary_files'
+require 'vagrant-lxc/action/private_networks'
 require 'vagrant-lxc/action/setup_package_files'
 require 'vagrant-lxc/action/warn_networks'
-
-unless Vagrant::Backports.vagrant_1_3_or_later?
-  require 'vagrant-backports/action/wait_for_communicator'
-end
-unless Vagrant::Backports.vagrant_1_5_or_later?
-  require 'vagrant-backports/ui'
-  require 'vagrant-backports/action/handle_box'
-  require 'vagrant-backports/action/message'
-  require 'vagrant-backports/action/is_state'
-end
 
 module Vagrant
   module LXC
@@ -57,18 +48,14 @@ module Vagrant
           b.use Builtin::Provision
           b.use Builtin::EnvSet, :port_collision_repair => true
           b.use Builtin::HandleForwardedPortCollisions
-          if Vagrant::Backports.vagrant_1_4_or_later?
-            b.use PrepareNFSValidIds
-            b.use Builtin::SyncedFolderCleanup
-            b.use Builtin::SyncedFolders
-            b.use PrepareNFSSettings
-          else
-            require 'vagrant-lxc/backports/action/share_folders'
-            b.use ShareFolders
-          end
+          b.use PrepareNFSValidIds
+          b.use Builtin::SyncedFolderCleanup
+          b.use Builtin::SyncedFolders
+          b.use PrepareNFSSettings
           b.use Builtin::SetHostname
           b.use WarnNetworks
           b.use ForwardPorts
+          b.use PrivateNetworks
           b.use Boot
           b.use Builtin::WaitForCommunicator
         end
@@ -138,7 +125,7 @@ module Vagrant
             end
 
             b2.use ClearForwardedPorts
-            b2.use RemoveTemporaryFiles
+            b2.use GcPrivateNetworkBridges
             b2.use Builtin::Call, Builtin::GracefulHalt, :stopped, :running do |env2, b3|
               if !env2[:result]
                 b3.use ForcedHalt
@@ -158,16 +145,13 @@ module Vagrant
               next
             end
 
-            # TODO: Use Vagrant's built in action once we drop support for vagrant 1.2
             b2.use Builtin::Call, DestroyConfirm do |env2, b3|
               if env2[:result]
                 b3.use Builtin::ConfigValidate
                 b3.use Builtin::EnvSet, :force_halt => true
                 b3.use action_halt
                 b3.use Destroy
-                if Vagrant::Backports.vagrant_1_3_or_later?
-                  b3.use Builtin::ProvisionerCleanup
-                end
+                b3.use Builtin::ProvisionerCleanup
               else
                 b3.use Builtin::Message, I18n.t("vagrant_lxc.messages.will_not_destroy")
               end
@@ -195,16 +179,11 @@ module Vagrant
 
       # This action is called to read the IP of the container. The IP found
       # is expected to be put into the `:machine_ip` key.
-      def self.action_fetch_ip
+      def self.action_ssh_ip
         Builder.new.tap do |b|
-          b.use Builtin::ConfigValidate
-          b.use Builtin::Call, Builtin::IsState, :running do |env, b2|
-            if env[:result]
-              b2.use FetchIpWithLxcAttach if env[:machine].provider.driver.supports_attach?
-              b2.use FetchIpFromDnsmasqLeases
-            else
-              b2.use Builtin::Message, I18n.t("vagrant_lxc.messages.not_running")
-            end
+          b.use Builtin::Call, Builtin::ConfigValidate do |env, b2|
+            b2.use FetchIpWithLxcAttach if env[:machine].provider.driver.supports_attach?
+            b2.use FetchIpFromDnsmasqLeases
           end
         end
       end
